@@ -1,0 +1,165 @@
+import "dotenv/config";
+import path from "path";
+import fs from "fs";
+import zlib from "zlib";
+import express from "express";
+import cors from "cors";
+import routes from "./routes";
+import { errorHandler } from "./middleware/errorHandler";
+import { pool } from "./config/database";
+import { schedulePhotoCleanup } from "./jobs/photoCleanup";
+
+const app = express();
+const PORT = Number(process.env.PORT) || 5000;
+
+/**
+ * Admin panel is same-origin (static files from this process).
+ * Teacher mobile app is a separate origin — CORS stays enabled for it.
+ * Tighten origin allowlist to your production domains later via CORS_ORIGIN.
+ */
+const corsOrigin = process.env.CORS_ORIGIN?.trim();
+app.use(
+  cors(
+    corsOrigin
+      ? { origin: corsOrigin.split(",").map((o) => o.trim()) }
+      : process.env.NODE_ENV === "production"
+        ? { origin: true } // reflect request origin (teacher app + same-origin admin)
+        : undefined // allow all in development
+  )
+);
+app.use(express.json());
+
+/** Shrink large JSON lists (student tables) without an extra dependency. */
+app.use((req, res, next) => {
+  const accept = String(req.headers["accept-encoding"] ?? "");
+  if (!/\bgzip\b/.test(accept)) {
+    next();
+    return;
+  }
+  const originalJson = res.json.bind(res);
+  res.json = ((body: unknown) => {
+    let payload: Buffer;
+    try {
+      payload = Buffer.from(JSON.stringify(body ?? null));
+    } catch {
+      return originalJson(body);
+    }
+    if (payload.length < 2048) return originalJson(body);
+    zlib.gzip(payload, { level: 4 }, (err, gz) => {
+      if (err || res.headersSent) {
+        if (!res.headersSent) originalJson(body);
+        return;
+      }
+      res.setHeader("Content-Encoding", "gzip");
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.setHeader("Vary", "Accept-Encoding");
+      res.setHeader("Content-Length", gz.length);
+      res.end(gz);
+    });
+    return res;
+  }) as typeof res.json;
+  next();
+});
+
+// ---------------------------------------------------------------------------
+// Middleware / route order (critical):
+//   (a) /api/* API routes
+//   (b) express.static for backend/public  (JS/CSS/images)
+//   (c) SPA catch-all → index.html only for extension-less paths
+// ---------------------------------------------------------------------------
+
+/** (a) All API routes live under /api */
+// Explicit route: express.static ignores dot-directories by default.
+app.get("/.well-known/assetlinks.json", (_req, res) => {
+  const fingerprints = (process.env.ADMIN_ANDROID_CERT_SHA256 ?? "").split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
+  if (!fingerprints.length || fingerprints.some(s => !/^(?:[0-9A-F]{2}:){31}[0-9A-F]{2}$/.test(s))) {
+    res.status(404).json({ error: "Admin Android association is not configured" });
+    return;
+  }
+  res.setHeader("Cache-Control", "public, max-age=300");
+  res.json([{ relation: ["delegate_permission/common.handle_all_urls"], target: {
+    namespace: "android_app", package_name: "com.schoolid.admin", sha256_cert_fingerprints: fingerprints
+  } }]);
+});
+app.use("/api", routes);
+
+/**
+ * (b) Admin-web build output.
+ * Resolves to backend/public whether running from src/ (tsx) or dist/ (node).
+ */
+const publicDir = path.resolve(__dirname, "..", "public");
+
+app.use(
+  express.static(publicDir, {
+    index: false, // never auto-serve index.html here; SPA handler owns that
+    fallthrough: true,
+    setHeaders(res, filePath) {
+      if (filePath.endsWith(`${path.sep}index.html`)) {
+        res.setHeader("Cache-Control", "no-cache");
+        return;
+      }
+      if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      }
+    },
+  })
+);
+
+/**
+ * (c) SPA fallback for React Router.
+ * - Never for /api/*
+ * - Never for paths that look like static assets (have a file extension)
+ * - Missing .js/.css/etc → real 404, not index.html (avoids MIME module errors)
+ */
+app.use((req, res, next) => {
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    next();
+    return;
+  }
+
+  if (req.path.startsWith("/api")) {
+    next();
+    return;
+  }
+
+  // Asset-like request: do not fall back to HTML
+  if (path.extname(req.path)) {
+    res.status(404).type("text").send("Not found");
+    return;
+  }
+
+  const indexHtml = path.join(publicDir, "index.html");
+  if (!fs.existsSync(indexHtml)) {
+    res
+      .status(503)
+      .type("text")
+      .send(
+        "Admin panel is not built yet. From the repo root run: npm run build:admin"
+      );
+    return;
+  }
+
+  res.sendFile(indexHtml, (err) => {
+    if (err) next(err);
+  });
+});
+
+app.use(errorHandler);
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server listening on 0.0.0.0:${PORT} (NODE_ENV=${process.env.NODE_ENV ?? "undefined"})`);
+  console.log(`  Static dir:  ${publicDir}`);
+  schedulePhotoCleanup();
+});
+
+process.on("SIGINT", async () => {
+  await pool.end();
+  process.exit(0);
+});
+
+process.on("SIGTERM", async () => {
+  await pool.end();
+  process.exit(0);
+});
+
+export default app;

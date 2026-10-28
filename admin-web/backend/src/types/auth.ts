@@ -1,0 +1,51 @@
+export type UserRole = "admin" | "teacher" | "institute_staff" | "organization_staff";
+
+export interface User {
+  id: string;
+  email: string;
+  username: string | null;
+  password_hash: string;
+  role: UserRole;
+  school_id: string | null;
+  institute_id: string | null;
+  assigned_class: string | null;
+  assigned_section: string | null;
+  created_at: Date;
+}
+
+export interface JWTPayload {
+  credentialVersion?: string;
+  userId: string;
+  role: UserRole;
+  schoolId: string | null;
+  instituteId?: string | null;
+  organizationId?: string | null;
+  assignedClass: string | null;
+  assignedSection: string | null;
+  isSuperAdmin?: boolean;
+}
+
+export interface LoginRequest {
+  email: string;
+  password: string;
+}
+
+export interface RegisterRequest {
+  email: string;
+  password: string;
+  role: UserRole;
+  schoolId: string;
+  assignedClass?: string | null;
+  assignedSection?: string | null;
+}
+
+export interface AuthUser {
+  userId: string;
+  role: UserRole;
+  schoolId: string | null;
+  instituteId?: string | null;
+  organizationId?: string | null;
+  assignedClass: string | null;
+  assignedSection: string | null;
+  isSuperAdmin?: boolean;
+}

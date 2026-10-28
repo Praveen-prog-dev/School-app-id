@@ -1,0 +1,91 @@
+import {getSchoolParentLink} from "../controllers/schoolParentFormController";
+import { Router } from "express";
+import { authMiddleware, requireRole } from "../middleware/auth";
+import { requireActiveTeacherOrg } from "../middleware/orgAccess";
+import { optionalUploadSchoolAssets } from "../middleware/optionalUpload";
+import { uploadStudentPhoto as photoUpload } from "../middleware/upload";
+import {
+  deleteStudentPhoto,
+  createTeacherStudent,
+  getTeacherHome,
+  listTeacherModels,
+  getTeacherProgress,
+  getTeacherFormConfig,
+  getTeacherStudent,
+  listTeacherStudents,
+  updateTeacherStudent,
+  uploadMemberSignature,
+  uploadStudentPhoto,
+} from "../controllers/teacherController";
+import {
+  listTeacherTemplates,
+  selectTeacherTemplate,
+} from "../controllers/templateController";
+import {
+  deleteAllTeacherNotifications,
+  deleteTeacherNotification,
+  listTeacherNotifications,
+  markTeacherNotificationRead,
+} from "../controllers/notificationController";
+import {
+  registerTeacherPushToken,
+  unregisterTeacherPushToken,
+} from "../controllers/pushTokenController";
+import { getTeacherCardPreview } from "../controllers/cardPreviewController";
+import {
+  getTeacherOrganization,
+  updateTeacherOrganization,
+} from "../controllers/organizationController";
+import { getLatestTeacherBrochure, listTeacherBrochures } from "../controllers/catalogController";
+import { getTeacherBranding } from "../controllers/customerBrandController";
+
+const router = Router();
+
+router.get("/parent-link", authMiddleware, requireRole("teacher"), requireActiveTeacherOrg, getSchoolParentLink);
+const sharedAccess = [authMiddleware, requireRole("teacher", "institute_staff", "organization_staff"), requireActiveTeacherOrg];
+router.get("/organization", ...sharedAccess, getTeacherOrganization);
+router.put("/organization", ...sharedAccess, optionalUploadSchoolAssets, updateTeacherOrganization);
+router.get("/models", ...sharedAccess, listTeacherModels);
+router.get("/templates", ...sharedAccess, listTeacherTemplates);
+router.post("/templates/:id/select", ...sharedAccess, selectTeacherTemplate);
+
+router.get("/notifications", ...sharedAccess, listTeacherNotifications);
+router.post("/notifications/delete-all", ...sharedAccess, deleteAllTeacherNotifications);
+router.post("/notifications/:id/read", ...sharedAccess, markTeacherNotificationRead);
+router.post("/notifications/:id/delete", ...sharedAccess, deleteTeacherNotification);
+router.post("/push-token", ...sharedAccess, registerTeacherPushToken);
+router.delete("/push-token", ...sharedAccess, unregisterTeacherPushToken);
+
+router.use(
+  authMiddleware,
+  requireRole("teacher", "institute_staff"),
+  requireActiveTeacherOrg
+);
+
+router.get("/home", getTeacherHome);
+router.get("/branding", getTeacherBranding);
+router.get("/form-config", getTeacherFormConfig);
+
+router.get("/students", listTeacherStudents);
+router.get("/students/:id", getTeacherStudent);
+router.post("/students", createTeacherStudent);
+router.put("/students/:id", updateTeacherStudent);
+router.post(
+  "/students/:id/photo",
+  photoUpload.single("photo"),
+  uploadStudentPhoto
+);
+router.post(
+  "/students/:id/signature",
+  photoUpload.single("signature"),
+  uploadMemberSignature
+);
+router.delete("/students/:id/photo", deleteStudentPhoto);
+router.get("/students/:id/card-preview", getTeacherCardPreview);
+router.get("/progress", getTeacherProgress);
+
+
+router.get("/brochures", listTeacherBrochures);
+router.get("/brochure", getLatestTeacherBrochure);
+
+export default router;
